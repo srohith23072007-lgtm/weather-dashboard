@@ -1,5 +1,5 @@
 // Replace this value with your OpenWeatherMap API key to enable live weather.
-const API_KEY = "YOUR_OPENWEATHERMAP_API_KEY";
+const API_KEY = "cb5cb3cbebbf98a762063e16313185ca";
 const API_BASE = "https://api.openweathermap.org/data/2.5";
 const ICON_BASE = "https://openweathermap.org/img/wn";
 
@@ -13,6 +13,10 @@ const demoWeather = {
   wind: { speed: 4.1 },
   clouds: { all: 28 },
   visibility: 10000
+};
+
+const demoAir = {
+  list: [{ main: { aqi: 2 }, components: { pm2_5: 8.4, pm10: 14.1 } }]
 };
 
 const demoForecast = {
@@ -52,6 +56,10 @@ const elements = {
   visibility: document.querySelector("#visibility"),
   sunrise: document.querySelector("#sunrise"),
   sunset: document.querySelector("#sunset"),
+  aqiValue: document.querySelector("#aqi-value"),
+  aqiLabel: document.querySelector("#aqi-label"),
+  aqiMarker: document.querySelector("#aqi-marker"),
+  aqiNote: document.querySelector("#aqi-note"),
   forecast: document.querySelector("#forecast-grid"),
   notice: document.querySelector("#demo-notice"),
   dismissNotice: document.querySelector("#dismiss-notice"),
@@ -62,6 +70,7 @@ const elements = {
 
 let currentWeather = demoWeather;
 let currentForecast = demoForecast;
+let currentAir = demoAir;
 let selectedUnit = "c";
 let requestSequence = 0;
 
@@ -89,7 +98,7 @@ function iconUrl(icon, size = "2x") {
   return `${ICON_BASE}/${icon || "01d"}@${size}.png`;
 }
 
-function renderCurrent(weather, forecast) {
+function renderCurrent(weather, forecast, air = currentAir) {
   const condition = weather.weather?.[0]?.description || "Weather unavailable";
   const offset = weather.timezone || 0;
   const countryNames = new Intl.DisplayNames(["en"], { type: "region" });
@@ -114,6 +123,34 @@ function renderCurrent(weather, forecast) {
   elements.sunset.textContent = localDate(weather.sys.sunset, offset, { hour: "numeric", minute: "2-digit" });
   elements.localTime.textContent = localDate(weather.dt, offset, { weekday: "short", hour: "numeric", minute: "2-digit" });
   renderForecast(forecast, offset);
+  renderAir(air);
+}
+
+const AQI_LEVELS = [
+  { label: "Good", color: "#6fdc8c" },
+  { label: "Fair", color: "#d7e46a" },
+  { label: "Moderate", color: "#ffd166" },
+  { label: "Poor", color: "#ff9a5c" },
+  { label: "Very poor", color: "#ff6b8b" }
+];
+
+function renderAir(air) {
+  const entry = air?.list?.[0];
+  if (!entry) {
+    elements.aqiValue.textContent = "--";
+    elements.aqiLabel.textContent = "Unavailable";
+    elements.aqiLabel.style.background = "";
+    elements.aqiNote.textContent = "Air quality data is unavailable for this location";
+    return;
+  }
+  const aqi = Math.min(Math.max(entry.main.aqi, 1), 5);
+  const level = AQI_LEVELS[aqi - 1];
+  const { pm2_5 = 0, pm10 = 0 } = entry.components || {};
+  elements.aqiValue.textContent = `${aqi}/5`;
+  elements.aqiLabel.textContent = level.label;
+  elements.aqiLabel.style.background = level.color;
+  elements.aqiMarker.style.left = `${(aqi - 0.5) * 20}%`;
+  elements.aqiNote.textContent = `PM2.5 ${pm2_5.toFixed(1)} · PM10 ${pm10.toFixed(1)} µg/m³`;
 }
 
 function renderForecast(forecast, offset) {
@@ -166,6 +203,18 @@ function hideError() {
   elements.error.textContent = "";
 }
 
+// Air quality is a nice-to-have: failures return null so weather still loads.
+async function fetchAirQuality(coord) {
+  if (!coord) return null;
+  try {
+    const params = new URLSearchParams({ lat: coord.lat, lon: coord.lon, appid: API_KEY });
+    const response = await fetch(`${API_BASE}/air_pollution?${params}`);
+    return response.ok ? await response.json() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchWeather(query) {
   const sequence = ++requestSequence;
   hideError();
@@ -182,9 +231,12 @@ async function fetchWeather(query) {
     if (!weatherResponse.ok || !forecastResponse.ok) throw new Error("Weather data is unavailable right now. Please try again in a moment.");
     const [weather, forecast] = await Promise.all([weatherResponse.json(), forecastResponse.json()]);
     if (sequence !== requestSequence) return;
+    const air = await fetchAirQuality(weather.coord);
+    if (sequence !== requestSequence) return;
     currentWeather = weather;
     currentForecast = forecast;
-    renderCurrent(weather, forecast);
+    currentAir = air;
+    renderCurrent(weather, forecast, air);
     elements.notice.hidden = true;
     hideError();
   } catch (error) {
